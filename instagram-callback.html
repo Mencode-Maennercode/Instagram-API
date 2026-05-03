@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instagram Authentifizierung</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+        .success { color: #4CAF50; }
+        .error { color: #f44336; }
+        .loading { color: #2196F3; }
+    </style>
+</head>
+<body>
+    <div id="message">
+        <h1 class="loading">Instagram Authentifizierung...</h1>
+        <p>Bitte warten Sie einen Moment.</p>
+    </div>
+    
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const code = urlParams.get('code');
+        const error = urlParams.get('error');
+        
+        const messageDiv = document.getElementById('message');
+        
+        if (error) {
+            messageDiv.innerHTML = `
+                <h1 class="error">Fehler bei der Authentifizierung</h1>
+                <p>${error}</p>
+                <p>Sie können dieses Fenster jetzt schließen.</p>
+            `;
+        } else if (code) {
+            console.log('Authorization code received:', code);
+            
+            // Trigger GitHub Action
+            fetch('https://api.github.com/repos/Mencode-Maennercode/Instagram-API/dispatches', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'token YOUR_GITHUB_TOKEN',
+                    'Accept': 'application/vnd.github.v3+json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    event_type: 'instagram_auth',
+                    client_payload: { code: code }
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('GitHub API request failed');
+                }
+                return response.json();
+            })
+            .then(() => {
+                messageDiv.innerHTML = `
+                    <h1 class="success">Authentifizierung erfolgreich!</h1>
+                    <p>Ihr Instagram-Konto wurde verbunden.</p>
+                    <p>Die Daten werden in wenigen Minuten aktualisiert.</p>
+                    <p>Sie können dieses Fenster jetzt schließen.</p>
+                `;
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                messageDiv.innerHTML = `
+                    <h1 class="error">Fehler bei der Übertragung</h1>
+                    <p>Bitte versuchen Sie es erneut oder kontaktieren Sie den Administrator.</p>
+                    <p>Fehler: ${error.message}</p>
+                `;
+            });
+        } else {
+            messageDiv.innerHTML = `
+                <h1 class="error">Kein Authentifizierungscode gefunden</h1>
+                <p>Bitte versuchen Sie die Authentifizierung erneut.</p>
+            `;
+        }
+    </script>
+</body>
+</html>

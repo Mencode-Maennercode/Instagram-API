@@ -1,0 +1,37 @@
+name: Instagram Sync
+on:
+  schedule:
+    - cron: '0 */6 * * *' # Alle 6 Stunden
+  repository_dispatch:
+    types: [instagram_auth]
+  workflow_dispatch:
+
+jobs:
+  sync-instagram:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          
+      - name: Install dependencies
+        run: npm install
+        
+      - name: Get Instagram Data
+        env:
+          INSTAGRAM_CLIENT_ID: ${{ secrets.INSTAGRAM_CLIENT_ID }}
+          INSTAGRAM_CLIENT_SECRET: ${{ secrets.INSTAGRAM_CLIENT_SECRET }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          GITHUB_EVENT_PAYLOAD: ${{ toJson(github.event) }}
+        run: node src/index.js
+        
+      - name: Commit and push
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add data/instagram.json
+          git commit -m "Update Instagram data" || exit 0
+          git push
