@@ -8,105 +8,89 @@ async function syncInstagram() {
   let accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
   
   try {
-    // Wenn Code von Callback vorhanden
+    // Wenn Code von Callback vorhanden (Instagram Login Flow)
     if (process.env.GITHUB_EVENT_PAYLOAD) {
       const payload = JSON.parse(process.env.GITHUB_EVENT_PAYLOAD);
       if (payload.client_payload?.code) {
-        console.log('Exchanging code for access token...');
+        console.log('Exchanging code for short-lived token...');
         
-        const tokenResponse = await axios.post('https://api.instagram.com/oauth/access_token', {
-          client_id: clientId,
-          client_secret: clientSecret,
-          grant_type: 'authorization_code',
-          redirect_uri: 'https://mencode-maennercode.github.io/Instagram-API/instagram-callback.html',
-          code: payload.client_payload.code
+        const formData = new URLSearchParams();
+        formData.append('client_id', clientId);
+        formData.append('client_secret', clientSecret);
+        formData.append('grant_type', 'authorization_code');
+        formData.append('redirect_uri', 'https://mencode-maennercode.github.io/Instagram-API/instagram-callback.html');
+        formData.append('code', payload.client_payload.code);
+        
+        const tokenResponse = await axios.post('https://api.instagram.com/oauth/access_token', formData, {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
         });
         
-        accessToken = tokenResponse.data.access_token;
-        console.log('New access token received:', accessToken);
+        const shortLivedToken = tokenResponse.data.access_token;
+        const userId = tokenResponse.data.user_id;
+        console.log('Short-lived token received for user:', userId);
         
         // Long-lived token anfordern (60 Tage gültig)
+        console.log('Exchanging for long-lived token...');
         const longLivedResponse = await axios.get('https://graph.instagram.com/access_token', {
           params: {
             grant_type: 'ig_exchange_token',
             client_secret: clientSecret,
-            access_token: accessToken
+            access_token: shortLivedToken
           }
         });
         
-        const longLivedToken = longLivedResponse.data.access_token;
-        console.log('Long-lived token received:', longLivedToken);
-        
-        // Hinweis: Token muss manuell in GitHub Secrets gespeichert werden
+        accessToken = longLivedResponse.data.access_token;
+        const expiresIn = longLivedResponse.data.expires_in;
+        console.log('Long-lived token received!');
+        console.log('Token expires in:', expiresIn, 'seconds (~60 days)');
+        console.log('='.repeat(60));
         console.log('IMPORTANT: Save this token as INSTAGRAM_ACCESS_TOKEN in GitHub Secrets!');
-        console.log('Token expires in:', longLivedResponse.data.expires_in, 'seconds');
+        console.log('Token:', accessToken);
+        console.log('='.repeat(60));
       }
     }
     
     if (!accessToken) {
-      throw new Error('No access token available');
+      throw new Error('No access token available. Please authenticate first.');
     }
     
-    // Token prüfen und ggf. erneuern
+    // Token prüfen und ggf. erneuern (nur für long-lived tokens)
+    console.log('Checking token validity...');
     try {
-      const tokenInfo = await axios.get('https://graph.instagram.com/debug_token', {
+      // Long-lived Token erneuern (funktioniert nur wenn noch mindestens 24h gültig)
+      const refreshResponse = await axios.get('https://graph.instagram.com/refresh_access_token', {
         params: {
+          grant_type: 'ig_refresh_token',
           access_token: accessToken
         }
       });
       
-      console.log('Token info:', tokenInfo.data.data);
-      
-      // Wenn Token bald abläuft (weniger als 1 Woche), erneuern
-      const expiresAt = new Date(tokenInfo.data.data.expires_at * 1000);
-      const now = new Date();
-      const daysUntilExpiry = (expiresAt - now) / (1000 * 60 * 60 * 24);
-      
-      if (daysUntilExpiry < 7) {
-        console.log('Token expires soon, refreshing...');
-        const refreshResponse = await axios.get('https://graph.instagram.com/refresh_access_token', {
-          params: {
-            grant_type: 'ig_refresh_token',
-            access_token: accessToken
-          }
-        });
-        
+      if (refreshResponse.data.access_token) {
         accessToken = refreshResponse.data.access_token;
-        console.log('Token refreshed:', accessToken);
-        console.log('IMPORTANT: Update INSTAGRAM_ACCESS_TOKEN in GitHub Secrets with new token!');
+        console.log('Token refreshed successfully!');
+        console.log('New token expires in:', refreshResponse.data.expires_in, 'seconds');
+        console.log('='.repeat(60));
+        console.log('IMPORTANT: Update INSTAGRAM_ACCESS_TOKEN in GitHub Secrets!');
+        console.log('New Token:', accessToken);
+        console.log('='.repeat(60));
       }
     } catch (tokenError) {
-      console.log('Token validation failed, may need re-authentication');
+      console.log('Token refresh not needed or failed:', tokenError.response?.data?.error?.message || 'Token still valid');
     }
     
     // Instagram Daten abrufen
     console.log('Fetching Instagram media...');
     const mediaResponse = await axios.get(`https://graph.instagram.com/me/media`, {
       params: {
-        fields: 'id,caption,media_type,media_url,permalink,timestamp,thumbnail_url,children',
+        fields: 'id,caption,media_type,media_url,permalink,timestamp,thumbnail_url,username,children{media_url,media_type,thumbnail_url}',
         access_token: accessToken,
         limit: 20
       }
     });
     
-    // Kinder für Carousel Posts abrufen
-    const mediaWithDetails = await Promise.all(
-      mediaResponse.data.data.map(async (post) => {
-        if (post.media_type === 'CAROUSEL_ALBUM' && post.children) {
-          const childrenResponse = await axios.get(`https://graph.instagram.com/${post.children.data[0].id}`, {
-            params: {
-              fields: 'media_url,thumbnail_url',
-              access_token: accessToken
-            }
-          });
-          return {
-            ...post,
-            children: childrenResponse.data
-          };
-        }
-        return post;
-      })
-    );
+    console.log(`Found ${mediaResponse.data.data.length} posts`);
     
     // Daten speichern
     const dataDir = path.join(__dirname, '../data');
@@ -116,16 +100,21 @@ async function syncInstagram() {
     
     const instagramData = {
       last_updated: new Date().toISOString(),
-      media: mediaWithDetails,
-      total_count: mediaWithDetails.length
+      media: mediaResponse.data.data,
+      total_count: mediaResponse.data.data.length
     };
     
     fs.writeFileSync(path.join(dataDir, 'instagram.json'), JSON.stringify(instagramData, null, 2));
-    console.log('Instagram data updated successfully');
-    console.log(`Found ${instagramData.total_count} posts`);
+    console.log('Instagram data saved to data/instagram.json');
+    console.log('Update successful!');
     
   } catch (error) {
-    console.error('Error syncing Instagram:', error.response?.data || error.message);
+    console.error('Error syncing Instagram:');
+    if (error.response?.data) {
+      console.error('API Error:', JSON.stringify(error.response.data, null, 2));
+    } else {
+      console.error(error.message);
+    }
     process.exit(1);
   }
 }
