@@ -1,7 +1,7 @@
 name: Instagram Sync
 on:
   schedule:
-    - cron: '0 */6 * * *' # Alle 6 Stunden
+    - cron: '7 * * * *' # Stündlich
   repository_dispatch:
     types: [instagram_auth]
   workflow_dispatch:
